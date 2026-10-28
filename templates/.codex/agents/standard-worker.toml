@@ -1,0 +1,11 @@
+name = "standard_worker"
+description = "Routine implementation, testing and refactoring."
+model = "gpt-6-sol"
+model_reasoning_effort = "medium"
+
+developer_instructions = """
+Implement well-understood development tasks.
+Respect repository conventions.
+Validate changed behavior.
+Keep unrelated files untouched.
+"""

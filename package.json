@@ -1,0 +1,11 @@
+{
+  "name": "codex-advisor",
+  "version": "0.1.0",
+  "description": "Install and manage project-scoped Codex advisor skills and agents.",
+  "type": "module",
+  "bin": { "advisor": "bin/advisor.js" },
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test", "check": "node --check bin/advisor.js && node --check src/advisor.js" },
+  "files": ["bin/", "src/", "templates/", "README.md"],
+  "private": true
+}
