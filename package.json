@@ -1,7 +1,7 @@
 {
   "name": "codex-advisor",
-  "version": "0.3.0",
-  "description": "Install and manage project-scoped advisor skills and agents for Codex, GitHub Copilot and Claude Code.",
+  "version": "0.4.0",
+  "description": "Install and manage project-scoped or global advisor skills and agents for Codex, GitHub Copilot and Claude Code.",
   "type": "module",
   "bin": { "advisor": "bin/advisor.js" },
   "engines": { "node": ">=20" },

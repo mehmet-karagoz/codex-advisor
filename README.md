@@ -1,7 +1,7 @@
 # codex-advisor
 
-Herhangi bir projeye **Codex, GitHub Copilot ve Claude Code** için model advisor
-skill ve ajanlarını kuran CLI. Copilot dosyaları hem **VS Code** hem **Visual Studio**
+**Codex, GitHub Copilot ve Claude Code** için model advisor skill ve ajanlarını
+proje bazında veya kullanıcı düzeyinde (global) kuran CLI. Copilot dosyaları hem **VS Code** hem **Visual Studio**
 için ortak biçimdedir. Node.js 20+ gerekir; CLI ek npm bağımlılığı veya API anahtarı istemez.
 AI araçları için kendi hesabınız, aboneliğiniz ve model erişiminiz gerekir.
 
@@ -11,20 +11,23 @@ AI araçları için kendi hesabınız, aboneliğiniz ve model erişiminiz gereki
 | --- | --- | --- | --- |
 | Küçük düzeltme, arama, yeniden adlandırma | `fast-worker` | Claude Haiku 5.5 | low |
 | Normal geliştirme, test, yerel refactor | `standard-worker` | Claude Sonnet 5.5 | medium |
-| Copilot koordinasyonu; planlama, mimari karar, yüksek düşünce | `advisor` | Claude Opus 5.5 | high |
+| Gerektiğinde danışma; planlama, mimari karar, yüksek düşünce | `advisor` | Claude Opus 5.5 | high |
 | Zor hata, güvenlik, eşzamanlılık incelemesi | `deep-expert` | Claude Opus 5.5 | high |
 
-Copilot'ta başlangıçta bir kez `advisor` seçilir; sonraki görevlerde uygun alt ajanı
-kendisi çağırır ve sonucu doğrular. Planlamayı kendisi, normal uygulamayı
-`standard-worker`, basit işleri `fast-worker`, zor incelemeleri `deep-expert` yürütür.
-Claude Code'da `advisor` inceleme ve planlama rolünü korur.
-Kısa işlerde alt ajan maliyeti gereksizse ana oturum devam eder.
+Üç araçta da normal geliştirme **standart modelle** başlar. Ana oturum işi yürütür;
+mimari karar, belirsizlik veya risk gerektiğinde güçlü `advisor` ajanından görüş alır,
+sonra uygulama ve doğrulamaya kendisi devam eder. `advisor` yalnızca analiz ve öneri
+verir; proje dosyalarını değiştirmez, işçi ajan çağırmaz ve sürekli koordinatör olmaz.
+Zor incelemeler `deep-expert`, basit bağımsız işler `fast-worker` ile yürütülebilir.
+Kısa işlerde ve standart ana oturumun doğrudan yapabileceği normal uygulamada
+alt ajan maliyeti eklenmez. Alt ajan olarak çağrılan işçi, danışma ihtiyacını
+çağıran ana oturuma bildirir; zincirleme advisor çağrısı yapmaz.
 Claude Code dosyalarında tam model kimlikleri ve `effort` alanı bulunur.
 Copilot dosyalarında model adları belirtilir; düşünme tercihi editörün desteklediği
 kontrollerle sınırlıdır. Desteklenmeyen bir Copilot düşünme ayarı üretilmez.
 
 Codex'in mevcut tercihleri korunur: `fast_worker` → `gpt-6-luna` / low,
-`standard_worker` → `gpt-6-sol` / medium, `deep_expert` → `gpt-6.1-sol` / high;
+`standard_worker` → `gpt-6-sol` / medium, `advisor` ve `deep_expert` → `gpt-6.1-sol` / high;
 kritik işlerde destekleniyorsa xhigh önerilir.
 
 Bunlar araçların yerel ajan yapılandırmaları ve yönlendirme talimatlarıdır.
@@ -47,7 +50,7 @@ cd /projenin/yolu
 # Codex
 advisor init --target codex
 
-# GitHub Copilot: VS Code ve Visual Studio için aynı kurulum
+# GitHub Copilot: CLI, VS Code ve Visual Studio için aynı kurulum
 advisor init --target copilot
 
 # Claude Code
@@ -76,16 +79,68 @@ desteklenir. Git dışında bulunulan klasör kullanılır. `--path` doğrudan v
 klasörü hedefler; klasör önceden var olmalıdır. Windows'ta da Node.js CLI kullanılır;
 boşluk içeren yolları tırnak içine alın.
 
-### VS Code ve Visual Studio / GitHub Copilot
+### Global kurulum
 
-1. Hedef projede `advisor init --target copilot` çalıştırın ve projeyi editörde açın.
-2. Copilot Chat ajan listesinden başlangıçta bir kez **advisor** seçin. Aynı
-   sohbette sonraki görevleri doğrudan yazın; her işte ajan/model seçmeniz gerekmez.
-   `advisor`, yerel alt ajan aracı varsa işin türüne göre uygun ajanı otomatik çağırır,
-   sonuçları birleştirir ve uygulamayı doğrulamaya kadar tamamlar. Yalnızca plan
-   veya inceleme istendiğinde o kapsamda kalır.
-3. Ajan/model görünmüyorsa pencereyi yenileyin; editör sürümünü ve Copilot
-   hesabınızdaki model erişimini kontrol edin.
+Aynı ajanları kendi bilgisayarınızdaki projelerde kullanmak için herhangi bir klasörde:
+
+```bash
+advisor init --global --target all
+advisor status --global
+advisor update --global
+advisor remove --global --target copilot
+```
+
+Tek araç için örneğin `advisor init --global --target codex` kullanın. `--target`
+verilmezse yeni global kurulumda yalnızca Codex seçilir; sonraki komutlar global
+manifestteki seçimi hatırlar. Global kapsamı yönetirken her komutta `--global`
+verin. `--global` ile `--path` birlikte kullanılamaz. `--dry-run` ve `--json`
+global kapsamda da çalışır.
+
+| Araç | Kişisel ajanlar | Skill | Talimatlar |
+| --- | --- | --- | --- |
+| Codex | `~/.codex/agents/` | `~/.agents/skills/model-advisor/` | `~/.codex/AGENTS.md` |
+| Copilot CLI | `~/.copilot/agents/` | `~/.copilot/skills/model-advisor/` | `~/.copilot/copilot-instructions.md` |
+| Claude Code | `~/.claude/agents/` | `~/.claude/skills/model-advisor/` | `~/.claude/CLAUDE.md` |
+
+Yollar standart kişisel yapılandırma dizinleridir. Farklı bir `CODEX_HOME`,
+`COPILOT_HOME` veya `CLAUDE_CONFIG_DIR` kullanılıyorsa bu sürüm ilgili global hedefi
+kurmadan açıklayıcı hata verir; özel yapılandırma kökleri henüz desteklenmez.
+Global Copilot kurulumu **Copilot CLI** içindir; VS Code ve Visual Studio için
+mevcut proje kurulumunu kullanın. Global kurulumun editörlerin kişisel ajan
+ve talimat ayarlarını otomatik yapılandırdığı varsayılmaz.
+
+Global kayıt ve kilit `~/.advisor/global/` altında tutulur. Proje kaydı ve bağlamı
+ayrı kalır; global kurulum çalışılan projeye dosya yazmaz ve ev dizinini proje
+olarak taramaz. Global ajanlar kendi skill dosyalarına tam yol ile başvurur.
+Mevcut kişisel talimatlara yalnızca işaretli advisor bölümü eklenir; diğer içerik,
+model ayarları ve izinler korunur. Kullanıcı dosyasıyla çakışma varsa tüm işlem durur.
+
+Proje ve global kurulum birlikte kullanılabilir; birini güncellemek veya kaldırmak
+diğerini güncellemez veya kaldırmaz. Aynı adlı ajanların hangisinin yükleneceği
+istemcinin öncelik kurallarına bağlıdır; eski proje tanımlarını da `advisor update`
+ile güncel tutun. Değişikliklerden sonra yeni oturum açın. Ana oturumda standart
+modeli kullanmaya devam edin; kurulum varsayılan sohbet modelini değiştirmez.
+
+Kişisel yollar için resmi belgeler: [Codex skill kapsamları](https://learn.chatgpt.com/docs/build-skills),
+[Codex ajanları](https://learn.chatgpt.com/docs/agent-configuration/subagents),
+[Codex global talimatları](https://learn.chatgpt.com/docs/learn/best-practices),
+[Copilot CLI kişisel yapılandırması](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference),
+[Copilot CLI skill'leri](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills),
+[Claude Code ajanları](https://code.claude.com/docs/en/sub-agents),
+[Claude Code skill'leri](https://code.claude.com/docs/en/skills) ve
+[Claude Code talimatları](https://code.claude.com/docs/en/memory).
+
+### GitHub Copilot CLI, VS Code ve Visual Studio
+
+1. Hedef projede `advisor init --target copilot` çalıştırın.
+2. Copilot CLI'da `copilot --agent=standard-worker` ile başlayın; mevcut oturumda
+   `/agent` ile **standard-worker** seçebilirsiniz. VS Code ve Visual Studio'da
+   Copilot Chat ajan listesinden başlangıçta **standard-worker** seçin.
+3. Sonraki görevleri doğrudan yazın. Sonnet 5.5 normal işi yürütür, gerektiğinde
+   yerel alt ajan aracıyla Opus 5.5 kullanan `advisor` ajanına danışır ve gelen görüşü
+   uygulayarak doğrulamayı tamamlar. Yalnızca plan veya inceleme istendiğinde o kapsamda kalır.
+4. Ajan/model görünmüyorsa oturumu veya pencereyi yenileyin; istemci sürümünü ve
+   Copilot hesabınızdaki model erişimini kontrol edin.
 
 Visual Studio'da özel ajanlar **18.4+** gerektirir. Daha eski sürümlerde
 `.github/copilot-instructions.md` ile ortak talimatlar kullanılabilir;
@@ -94,7 +149,7 @@ mevcut ajan/model seçicisini kullanın. VS Code'da güncel Copilot sürümünü
 araç seçicisinde yerel alt ajan çağrısının etkin olduğundan emin olun.
 
 Visual Studio'da özel ajan desteği, otomatik alt ajan çağrısının da bulunduğu
-anlamına gelmez; resmi belgeler bu özelliği doğrulamıyor. `advisor`, bulunduğu
+anlamına gelmez; resmi belgeler bu özelliği doğrulamıyor. `standard-worker`, bulunduğu
 ortamın gerçekten sunduğu araçları kullanır. Alt ajan aracı yoksa veya tercih edilen
 alt ajan modeli çalıştırılamıyorsa sınırlamayı belirtip işi mevcut modelle kendisi
 sürdürür; yalnızca mevcut yetenekler yetersiz kalırsa elle geçiş önerir.
@@ -102,27 +157,30 @@ Bu durumda alt ajanlara göre otomatik model değişimi gerçekleşmez.
 
 Ortak ajan dosyalarında `tools` kısıtlaması tanımlanmaz; böylece her editörün
 sağladığı araçlar kullanılabilir. VS Code'a özgü `agents`/`handoffs` alanlarına veya
-Visual Studio'da bulunmayabilecek araç adlarına dayanılmaz. Ana sohbet `advisor`
+Visual Studio'da bulunmayabilecek araç adlarına dayanılmaz. Ana sohbet `standard-worker`
 olarak kalır; model tercihleri çağrılan alt ajanların dosyalarından alınır.
 
 Mevcut hedef projeye bu davranışı geçirmek için CLI'ı güncelledikten sonra
-`advisor update --target copilot` çalıştırın ve `advisor` tanımını yeniden yüklemek
+`advisor update --target copilot` çalıştırın ve ajan tanımlarını yeniden yüklemek
 için yeni sohbet açın.
 
 Ajan biçimi ve model seçimi:
 [GitHub](https://docs.github.com/en/copilot/reference/custom-agents-configuration),
 [VS Code](https://code.visualstudio.com/docs/agent-customization/custom-agents),
 [Visual Studio](https://learn.microsoft.com/en-us/visualstudio/ide/copilot-specialized-agents?view=visualstudio).
+CLI ajanları: [GitHub Copilot CLI belgeleri](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/invoke-custom-agents).
 Alt ajan çağrısı ve modele ilişkin sınırlar:
 [VS Code alt ajan belgeleri](https://code.visualstudio.com/docs/agents/run/subagents).
 Model erişimi [Copilot planına ve istemciye](https://docs.github.com/en/copilot/reference/ai-models/supported-models) bağlıdır.
 
 ### Claude Code
 
-`advisor init --target claude` sonrasında hedef projede yeni Claude Code oturumu açın.
-`/model-advisor` ile skill'i çağırabilir veya doğrudan
-“standard-worker ile uygula; planlama için advisor kullan” diyebilirsiniz.
-`/agents` ile ajanları kontrol edin. `CLAUDE.md` ortak politikayı yükler.
+`advisor init --target claude` sonrasında hedef projede Sonnet 5.5 kullanan normal
+Claude Code oturumu açın. `claude --agent standard-worker` ile standart ajanı ana
+oturum olarak da başlatabilirsiniz. `/model-advisor` yönlendirme politikasını yükler;
+skill'i çağırmak tek başına model değiştirmez. Ana oturum gerektiğinde `advisor` ile
+Opus 5.5 görüşü alır ve uygulama/doğrulamaya devam eder. `/agents` ile ajanları
+kontrol edin. `CLAUDE.md` ortak politikayı yükler.
 Ajanlar `claude-haiku-5-5`, `claude-sonnet-5-5` ve `claude-opus-5-5` kimliklerini kullanır.
 
 Yerel ajan çağrısında model geçersiz kılma parametresi verilmemesi istenir;
@@ -132,8 +190,12 @@ model/effort değişkenleri bu tercihleri etkileyebilir.
 
 ### Codex
 
-`advisor init --target codex` sonrasında `$model-advisor` ile açıkça çağırın. Skill görünmezse oturumu yeniden açın.
-`AGENTS.md`, geliştirme planlamasında skill'in okunmasını ister.
+`advisor init --target codex` sonrasında normal oturumu `gpt-6-sol` / medium ile
+başlatın; örneğin `codex -m gpt-6-sol -c model_reasoning_effort=medium`.
+`$model-advisor` ile politikayı açıkça çağırabilirsiniz. Skill görünmezse oturumu yeniden açın.
+`AGENTS.md`, geliştirme planlamasında skill'in okunmasını ister. Ana oturum gerektiğinde
+`advisor` (`gpt-6.1-sol` / high) ajanına danışır, ardından uygulama/doğrulamaya devam eder.
+`standard_worker` bağımsız uygulama alt görevleri içindir; her normal işte çağrılması gerekmez.
 Mevcut `.codex/config.toml` ve ana oturum modeli değiştirilmez.
 [Codex ajan belgeleri](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
@@ -141,10 +203,10 @@ Mevcut `.codex/config.toml` ve ana oturum modeli değiştirilmez.
 
 | Komut | Davranış |
 | --- | --- |
-| `advisor init --target <araç>` | Seçilen aracı kurar veya mevcut kuruluma ekler; tekrar çalıştırılması kopya oluşturmaz. |
-| `advisor status` | Kurulu araçları ve dosya durumlarını gösterir; `--target` ile kontrol daraltılabilir. |
-| `advisor update` | Yalnızca kurulu araçları günceller. `--target` ile tek araç seçilebilir. |
-| `advisor remove` | Tüm kurulu araçları kaldırır; `--target` verilirse yalnızca o araç kaldırılır. |
+| `advisor init [--global] --target <araç>` | Seçilen aracı kurar veya mevcut kuruluma ekler; tekrar çalıştırılması kopya oluşturmaz. |
+| `advisor status [--global]` | Seçili kapsamda kurulu araçları ve dosya durumlarını gösterir; `--target` ile kontrol daraltılabilir. |
+| `advisor update [--global]` | Seçili kapsamda yalnızca kurulu araçları günceller. `--target` ile tek araç seçilebilir. |
+| `advisor remove [--global]` | Seçili kapsamda tüm kurulu araçları kaldırır; `--target` verilirse yalnızca o araç kaldırılır. |
 
 Örnekler:
 
@@ -161,13 +223,14 @@ kurulu olmayan varsa başarısız durum döndürür.
 Tek araç kaldırılırken diğerlerinin dosyaları, sahiplik bilgileri ve ortak bağlam
 korunur. Ortak dosyalar son araç kaldırıldığında temizlenir.
 
-`--target codex|copilot|claude|all`, `--dry-run`, `--json`, `--help` ve `--version` desteklenir.
+`--target codex|copilot|claude|all`, `--global`, `--dry-run`, `--json`, `--help` ve `--version` desteklenir.
 Başarı 0, hata/çakışma 1 çıkış kodudur. `status`, kurulum yoksa veya müdahale
 gerekiyorsa 1 döndürür. Hatalar stderr'e yazılır.
 
 **Eski kurulumlardan geçiş:** Bu CLI sürümünü edindikten sonra mevcut hedef projede
 `advisor update --dry-run`, ardından `advisor update` çalıştırın. Manifest,
-sahipliği korunarak sürüm 3 şemasına geçirilir. 0.1 kurulumları yalnızca Codex
+sahipliği korunarak sürüm 3 şemasına geçirilir. Önceki Codex kurulumlarına
+`advisor.toml` güvenli şekilde eklenir; aynı yolda farklı kullanıcı dosyası varsa işlem durur. 0.1 kurulumları yalnızca Codex
 olarak kalır; 0.2 kurulumlarında üç araç da kayıtlı tutulur. Yeni bir araç eklemek
 için örneğin `advisor init --target copilot` çalıştırın.
 
@@ -187,7 +250,7 @@ dosyalar, o aracın talimat bölümü ve ortak `.advisor/` dosyaları eklenir.
 
 ```text
 .agents/skills/model-advisor/SKILL.md
-.codex/agents/{fast-worker,standard-worker,deep-expert}.toml
+.codex/agents/{advisor,fast-worker,standard-worker,deep-expert}.toml
 .github/skills/model-advisor/SKILL.md
 .github/agents/{advisor,fast-worker,standard-worker,deep-expert}.agent.md
 .claude/skills/model-advisor/SKILL.md

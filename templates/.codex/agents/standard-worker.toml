@@ -5,7 +5,14 @@ model_reasoning_effort = "medium"
 
 developer_instructions = """
 Implement well-understood development tasks.
+Read .agents/skills/model-advisor/SKILL.md when planning work.
 Respect repository conventions.
 Validate changed behavior.
 Keep unrelated files untouched.
+When running as a worker subagent, return uncertainty or risks to the caller
+so it can consult advisor. Do not invoke advisor recursively.
+When running as the main session, consult advisor through native delegation
+only when uncertainty, architectural decisions or risk warrants stronger advice.
+Integrate that advice, then continue implementation and validation yourself.
+Preserve others' edits and stay within the assigned files and responsibility.
 """

@@ -247,38 +247,37 @@ test('CLI completes preview, install, status, update and remove in a project wit
 
 const HOST_INSTRUCTIONS = ['CLAUDE.md', '.github/copilot-instructions.md'];
 
-test('Copilot installs a persistent coordinator with automatic routing and a direct-work fallback', (t) => {
+test('Copilot starts with the standard agent and uses advisor only for consultation', (t) => {
   const root = project(t);
   let output;
   assert.equal(run(['init', '--target', 'copilot', '--path', root], root,
     (text) => { output = text; }), 0);
-  assert.match(output, /başlangıçta advisor ajanını bir kez seçin/);
-  const agent = get(root, '.github/agents/advisor.agent.md');
-  const header = agent.split('---')[1];
-  // Omitted tools keep each editor's native tools available, including edits and delegation.
-  assert.doesNotMatch(header, /^(tools|agents|handoffs):/m);
-  assert.match(agent, /automatically invoke the appropriate configured worker/);
-  for (const role of ['fast-worker', 'standard-worker', 'deep-expert']) {
-    assert.ok(agent.includes(`- ${role} (`));
-    const workerHeader = get(root, `.github/agents/${role}.agent.md`).split('---')[1];
-    assert.doesNotMatch(workerHeader, /^disable-model-invocation: true$/m);
+  assert.match(output, /standard-worker \(Claude Sonnet 5.5\) ile başlayın/);
+  const advisor = get(root, '.github/agents/advisor.agent.md');
+  const worker = get(root, '.github/agents/standard-worker.agent.md');
+  // Shared profiles leave each host's supported native tools available.
+  for (const role of ['advisor', 'fast-worker', 'standard-worker', 'deep-expert']) {
+    const header = get(root, `.github/agents/${role}.agent.md`).split('---')[1];
+    assert.doesNotMatch(header, /^(tools|agents|handoffs):/m);
   }
-  assert.match(agent, /without per-call model overrides/);
-  assert.match(agent, /complete the authorized work yourself/);
-  assert.match(agent, /You may edit files and run project commands/);
-  assert.doesNotMatch(agent, /This role is advisory: do not edit/);
-  assert.match(agent, /A request only for advice, review or a plan must remain within that scope/);
-  assert.match(get(root, '.github/copilot-instructions.md'), /Do not ask the user to choose an agent or model for every task/);
-  assert.match(get(root, '.github/skills/model-advisor/SKILL.md'), /Select advisor once/);
-  assert.match(get(root, '.github/agents/standard-worker.agent.md'), /instead of invoking advisor recursively/);
+  assert.match(advisor, /This role is advisory: do not edit files/);
+  assert.match(advisor, /Do not invoke workers or another advisor/);
+  assert.match(worker, /continue implementation and validation yourself/);
+  assert.match(worker, /without per-call model overrides/);
+  assert.match(worker, /When running as a worker subagent, return uncertainty/);
+  const instructions = get(root, '.github/copilot-instructions.md');
+  assert.match(instructions, /Do not ask the user to choose an agent or model for every task/);
+  assert.match(instructions, /continue with the current model when sufficient/);
+  assert.match(get(root, '.github/skills/model-advisor/SKILL.md'), /Select standard-worker/);
+  assert.doesNotMatch(instructions, /Keep advisor selected/);
   assert.equal(invoke(root, 'status').healthy, true);
 });
 
-test('Copilot update replaces a managed advisory-only agent and stays idempotent', (t) => {
+test('Copilot update replaces a managed persistent coordinator and stays isolated and idempotent', (t) => {
   const root = project(t);
   invoke(root, 'init', '--target', 'all');
   const name = '.github/agents/advisor.agent.md';
-  const old = '---\nname: advisor\nmodel: Claude Opus 5.5\n---\nThis role is advisory: do not edit files.\n';
+  const old = '---\nname: advisor\nmodel: Claude Opus 5.5\n---\nYou are the persistent coordinator. You may edit files.\n';
   put(root, name, old);
   const manifest = JSON.parse(get(root, MANIFEST));
   manifest.files[name].sha256 = createHash('sha256').update(old).digest('hex');
@@ -290,7 +289,7 @@ test('Copilot update replaces a managed advisory-only agent and stays idempotent
   assert.ok(preview.changes.some((item) => item.path === name && item.action === 'update'));
   assert.equal(get(root, name), old);
   assert.equal(invoke(root, 'update', '--target', 'copilot').code, 0);
-  assert.match(get(root, name), /persistent coordinator/);
+  assert.match(get(root, name), /This role is advisory: do not edit files/);
   assert.equal(get(root, '.claude/agents/advisor.md'), claude);
   assert.equal(get(root, '.codex/agents/standard-worker.toml'), codex);
   assert.equal(invoke(root, 'status').healthy, true);
@@ -314,6 +313,69 @@ test('installs native model profiles and a shared skill for all three hosts', (t
   assert.ok(get(root, '.codex/agents/standard-worker.toml').includes('model = "gpt-6-sol"'));
   for (const name of HOST_INSTRUCTIONS) assert.ok(get(root, name).includes('## Advisor'));
   assert.equal(JSON.parse(get(root, MANIFEST)).schemaVersion, 3);
+});
+
+test('all hosts install a standard main session policy and a stronger advisory-only agent', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'all');
+  for (const [instructions, advisorPath, standardPath] of [
+    ['AGENTS.md', '.codex/agents/advisor.toml', '.codex/agents/standard-worker.toml'],
+    ['CLAUDE.md', '.claude/agents/advisor.md', '.claude/agents/standard-worker.md'],
+    ['.github/copilot-instructions.md', '.github/agents/advisor.agent.md', '.github/agents/standard-worker.agent.md'],
+  ]) {
+    assert.match(get(root, instructions), /The standard main session owns implementation and validation/);
+    assert.match(get(root, instructions), /Resume work in the standard main session after consultation/);
+    assert.match(get(root, advisorPath), /This role is advisory: do not edit files/);
+    assert.match(get(root, advisorPath), /Do not invoke workers or another advisor/);
+    assert.match(get(root, standardPath), /When running as a worker subagent, return uncertainty/);
+  }
+  const codex = get(root, '.codex/agents/advisor.toml');
+  assert.match(codex, /model = "gpt-6.1-sol"/);
+  assert.match(codex, /model_reasoning_effort = "high"/);
+  // Installation must not force a main model or overwrite user settings.
+  assert.equal(fs.existsSync(path.join(root, '.codex/config.toml')), false);
+  assert.equal(fs.existsSync(path.join(root, '.claude/settings.json')), false);
+});
+
+function previousCodexInstall(root) {
+  invoke(root, 'init', '--target', 'all');
+  const name = '.codex/agents/advisor.toml';
+  fs.unlinkSync(path.join(root, name));
+  const manifest = JSON.parse(get(root, MANIFEST));
+  delete manifest.files[name];
+  put(root, MANIFEST, JSON.stringify(manifest));
+}
+
+test('previous manifests gain Codex advisor only when Codex is updated', (t) => {
+  const root = project(t);
+  previousCodexInstall(root);
+  const name = '.codex/agents/advisor.toml';
+  assert.equal(invoke(root, 'status').healthy, false);
+  assert.equal(invoke(root, 'update', '--target', 'copilot').code, 0);
+  assert.equal(fs.existsSync(path.join(root, name)), false);
+  assert.equal(invoke(root, 'status', '--target', 'copilot').healthy, true);
+  const preview = invoke(root, 'update', '--target', 'codex', '--dry-run');
+  assert.ok(preview.changes.some((item) => item.path === name && item.action === 'create'));
+  assert.equal(fs.existsSync(path.join(root, name)), false);
+  assert.equal(invoke(root, 'update', '--target', 'codex').code, 0);
+  assert.equal(invoke(root, 'status').healthy, true);
+  assert.deepEqual(invoke(root, 'update').changes, []);
+  assert.equal(invoke(root, 'remove').code, 0);
+  assert.equal(fs.existsSync(path.join(root, name)), false);
+});
+
+test('previous manifests preserve an unmanaged Codex advisor on conflict and removal', (t) => {
+  const root = project(t);
+  previousCodexInstall(root);
+  const name = '.codex/agents/advisor.toml';
+  put(root, name, 'User advisor');
+  const manifest = get(root, MANIFEST);
+  assert.equal(invoke(root, 'update', '--target', 'codex').code, 1);
+  assert.equal(get(root, MANIFEST), manifest);
+  assert.equal(get(root, name), 'User advisor');
+  assert.equal(invoke(root, 'remove', '--target', 'codex').code, 0);
+  assert.equal(get(root, name), 'User advisor');
+  assert.equal(invoke(root, 'status').healthy, true);
 });
 
 for (const name of HOST_INSTRUCTIONS) {

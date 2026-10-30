@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -13,7 +14,7 @@ const ROLES = ['advisor', 'fast-worker', 'standard-worker', 'deep-expert'];
 const TARGETS = {
   codex: {
     files: ['.agents/skills/model-advisor/SKILL.md',
-      ...ROLES.filter((role) => role !== 'advisor').map((role) => `.codex/agents/${role}.toml`)],
+      ...ROLES.map((role) => `.codex/agents/${role}.toml`)],
     instructions: 'AGENTS.md',
   },
   copilot: {
@@ -29,10 +30,22 @@ const TARGETS = {
 };
 const ALL_TARGETS = Object.keys(TARGETS);
 const orderedTargets = (targets) => ALL_TARGETS.filter((target) => targets.includes(target));
-const managedFiles = (targets) => [...targets.flatMap((target) => TARGETS[target].files), CONTEXT];
-const instructionFiles = (targets) => targets.map((target) => TARGETS[target].instructions);
-function manifestText(targets, files, instructions) {
-  return json({ schemaVersion: 3, version, profile: 'base', targets, files, instructions });
+const PROJECT = { global: false, targets: TARGETS, directory: '.advisor', manifest: MANIFEST, context: CONTEXT };
+const GLOBAL = {
+  global: true, directory: '.advisor/global', manifest: '.advisor/global/manifest.json', context: null,
+  targets: {
+    codex: { files: TARGETS.codex.files, instructions: '.codex/AGENTS.md' },
+    copilot: { files: TARGETS.copilot.files.map((name) => name.replace('.github/', '.copilot/')),
+      instructions: '.copilot/copilot-instructions.md' },
+    claude: { files: TARGETS.claude.files, instructions: '.claude/CLAUDE.md' },
+  },
+};
+const managedFiles = (targets, layout) => [...targets.flatMap((target) => layout.targets[target].files),
+  ...(layout.context ? [layout.context] : [])];
+const instructionFiles = (targets, layout) => targets.map((target) => layout.targets[target].instructions);
+function manifestText(targets, files, instructions, layout) {
+  return json({ schemaVersion: 3, version, profile: 'base', ...(layout.global ? { scope: 'global' } : {}),
+    targets, files, instructions });
 }
 const hash = (text) => crypto.createHash('sha256').update(text).digest('hex');
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -73,8 +86,8 @@ function projectRoot(directory, explicit) {
   }
 }
 
-function loadManifest(root) {
-  const source = read(root, MANIFEST);
+function loadManifest(root, layout) {
+  const source = read(root, layout.manifest);
   if (source === null) return null;
   let manifest;
   try { manifest = JSON.parse(source); } catch { throw new Error('Advisor manifest dosyası geçerli JSON değil.'); }
@@ -84,13 +97,19 @@ function loadManifest(root) {
     && ['', '\n', '\n\n', '\r\n', '\r\n\r\n'].includes(item.separator);
   const schema = manifest?.schemaVersion;
   if (![1, 2, 3].includes(schema)) throw new Error('Desteklenmeyen veya bozuk advisor manifest dosyası.');
+  if (layout.global ? schema !== 3 || manifest.scope !== 'global' : manifest.scope !== undefined) {
+    throw new Error('Advisor manifest kapsamı geçersiz.');
+  }
   const targets = schema === 1 ? ['codex'] : schema === 2 ? ALL_TARGETS : manifest.targets;
   if (!Array.isArray(targets) || targets.length === 0 || targets.length > ALL_TARGETS.length
     || new Set(targets).size !== targets.length || !targets.every((target) => Object.hasOwn(TARGETS, target))) {
     throw new Error('Desteklenmeyen veya bozuk advisor manifest dosyası.');
   }
-  const expected = managedFiles(targets);
-  const expectedInstructions = instructionFiles(targets);
+  // Older releases did not install a Codex advisor. Accept that exact legacy
+  // file set, without claiming ownership of an existing untracked advisor.
+  const expected = managedFiles(targets, layout).filter((name) =>
+    layout.global || name !== '.codex/agents/advisor.toml' || Object.hasOwn(manifest.files ?? {}, name));
+  const expectedInstructions = instructionFiles(targets, layout);
   if (!manifest.files || typeof manifest.files !== 'object'
     || Array.isArray(manifest.files) || Object.keys(manifest.files).length !== expected.length
     || !expected.every((name) => validRecord(manifest.files[name]))
@@ -150,30 +169,51 @@ function detect(root) {
   return { schemaVersion: 1, profile: 'base', manifests, technologies, frameworks, lockfiles, scripts, warnings };
 }
 
-function desiredFiles(root, targets) {
-  const templates = targets.flatMap((target) => TARGETS[target].files);
-  const files = Object.fromEntries(templates.map((name) => [name,
-    fs.readFileSync(path.join(packageRoot, 'templates', name.endsWith('/SKILL.md')
-      ? '.agents/skills/model-advisor/SKILL.md' : name), 'utf8')]));
-  files[CONTEXT] = json(detect(root));
+// Personal agent instructions must resolve their skill from every working directory.
+function globalReferences(text, root) {
+  const absolutePath = (name) => path.resolve(root, name).split(path.sep).join('/');
+  text = text.replaceAll('.github/copilot-instructions.md', absolutePath('.copilot/copilot-instructions.md'))
+    .replaceAll('and CLAUDE.md.', `and ${absolutePath('.claude/CLAUDE.md')}.`);
+  for (const [local, personal] of [
+    ['.agents/skills/', '.agents/skills/'], ['.codex/agents/', '.codex/agents/'],
+    ['.github/skills/', '.copilot/skills/'], ['.github/agents/', '.copilot/agents/'],
+    ['.claude/skills/', '.claude/skills/'], ['.claude/agents/', '.claude/agents/'],
+  ]) {
+    const absolute = absolutePath(personal) + '/';
+    text = text.replaceAll(local, absolute);
+  }
+  return text;
+}
+
+function desiredFiles(root, targets, layout) {
+  const files = {};
+  for (const target of targets) {
+    for (const [index, name] of layout.targets[target].files.entries()) {
+      const template = name.endsWith('/SKILL.md')
+        ? '.agents/skills/model-advisor/SKILL.md' : TARGETS[target].files[index];
+      const text = fs.readFileSync(path.join(packageRoot, 'templates', template), 'utf8');
+      files[name] = layout.global ? globalReferences(text, root) : text;
+    }
+  }
+  if (layout.context) files[layout.context] = json(detect(root));
   return files;
 }
 
-function desiredSection(name = 'AGENTS.md') {
-  const skill = name === 'CLAUDE.md' ? '.claude/skills/model-advisor/SKILL.md'
-    : name === '.github/copilot-instructions.md' ? '.github/skills/model-advisor/SKILL.md'
-      : '.agents/skills/model-advisor/SKILL.md';
-  const routing = name === 'AGENTS.md'
-    ? 'Use fast_worker for simple tasks, standard_worker for normal development, and deep_expert for difficult work; preserve the configured GPT model preferences.'
-    : 'Use fast-worker (Claude Haiku 5.5) for simple tasks, standard-worker (Claude Sonnet 5.5) for normal development, advisor (Claude Opus 5.5) for high reasoning and planning, and deep-expert (Claude Opus 5.5) for difficult investigations.';
-  const fallback = name === '.github/copilot-instructions.md'
-    ? 'Keep advisor selected as the persistent coordinator after the initial selection. Automatically invoke suitable configured workers by exact name without per-call model overrides when native delegation is available and beneficial. Do not ask the user to choose an agent or model for every task. Workers return findings to the coordinator instead of recursively invoking advisor. Carry authorized implementation through validation; respect requests only for advice or planning. If delegation or a configured model is unavailable, disclose the limitation and complete the work in advisor with the current model when sufficient. Recommend a manual switch only if current capabilities are insufficient; never silently substitute a worker model.'
-    : 'If a configured model is unavailable, disclose that limitation and recommend an available model or manual selection; do not silently substitute for Sonnet 5.5.';
-  return `${START}\n## Advisor\n\nRead ${skill} when planning development work.\nRead .advisor/context.json for detected project technologies and validation scripts; verify these hints before using them.\nEvaluate complexity before substantial execution. Delegate only when it improves efficiency or quality.\n${routing}\nKeep short tasks in the main session when delegation overhead outweighs its benefit. Keep the main session model unchanged.\nUse the host's native agent tool only when available. Never claim a model switch or delegation that did not happen.\n${fallback}\n${END}`;
+function desiredSection(name, root, layout) {
+  const host = ALL_TARGETS.find((target) => layout.targets[target].instructions === name);
+  const skillPath = layout.targets[host].files[0];
+  const skill = layout.global ? path.join(root, skillPath).split(path.sep).join('/') : skillPath;
+  const context = layout.global
+    ? "Read the current project's .advisor/context.json when present; verify its hints against that project."
+    : 'Read .advisor/context.json for detected project technologies and validation scripts; verify these hints before using them.';
+  const routing = host === 'codex'
+    ? 'Start the main session with gpt-6-sol / medium for normal development. Use standard_worker for delegated implementation, fast_worker for simple isolated tasks, advisor (gpt-6.1-sol / high) for advice when warranted, and deep_expert for difficult investigations.'
+    : 'Start the main session with Claude Sonnet 5.5 for normal development; standard-worker is the implementation agent. Use fast-worker (Claude Haiku 5.5) for simple isolated tasks, advisor (Claude Opus 5.5) for advice when warranted, and deep-expert (Claude Opus 5.5) for difficult investigations. Invoke configured agents by exact name without per-call model overrides.';
+  return `${START}\n## Advisor\n\nRead ${skill} when planning development work.\n${context}\nEvaluate complexity before substantial execution. Delegate only when it improves efficiency or quality.\n${routing}\nThe standard main session owns implementation and validation. Consult advisor only for meaningful architectural decisions, uncertainty or risk; advisor returns analysis and recommendations without changing project files or coordinating implementation. Resume work in the standard main session after consultation.\nWhen running as a worker subagent, return uncertainty to the caller so it can consult advisor; do not create recursive consultation chains.\nKeep short tasks in the main session when delegation overhead outweighs its benefit. Keep the main session model unchanged. Do not ask the user to choose an agent or model for every task.\nUse the host's native agent tool only when available. Never claim a model switch or delegation that did not happen.\nIf delegation or a configured model is unavailable, disclose the limitation and continue with the current model when sufficient. Recommend a manual switch only if current capabilities are insufficient; never silently substitute a configured model. Carry authorized implementation through validation; respect requests only for advice or planning.\n${END}`;
 }
 
-function planInstall(root, manifest, targets) {
-  const files = desiredFiles(root, targets);
+function planInstall(root, manifest, targets, layout) {
+  const files = desiredFiles(root, targets, layout);
   const changes = [];
   const records = { ...manifest?.files };
   const conflicts = [];
@@ -190,7 +230,7 @@ function planInstall(root, manifest, targets) {
     if (current !== next) changes.push({ path: name, before: current, after: next });
   }
   const instructions = { ...manifest?.instructions };
-  for (const name of instructionFiles(targets)) {
+  for (const name of instructionFiles(targets, layout)) {
     const original = read(root, name);
     const found = section(original, name);
     const previous = manifest?.instructions[name];
@@ -199,7 +239,7 @@ function planInstall(root, manifest, targets) {
     } else if (!previous && found) {
       conflicts.push(`${name}: kaydı olmayan bir advisor bölümü var`);
     }
-    const block = desiredSection(name);
+    const block = desiredSection(name, root, layout);
     const separator = found ? previous?.separator ?? ''
       : !original ? '' : original.endsWith('\n\n') || original.endsWith('\r\n\r\n') ? ''
         : original.endsWith('\n') ? '\n' : '\n\n';
@@ -209,30 +249,30 @@ function planInstall(root, manifest, targets) {
     if (original !== next) changes.push({ path: name, before: original, after: next });
     instructions[name] = { sha256: hash(block), separator, existed: previous?.existed ?? (original !== null) };
   }
-  const nextManifest = manifestText(orderedTargets([...(manifest?.targets ?? []), ...targets]), records, instructions);
-  const oldManifest = read(root, MANIFEST);
-  if (oldManifest !== nextManifest) changes.push({ path: MANIFEST, before: oldManifest, after: nextManifest });
-  return { changes, conflicts, context: JSON.parse(files[CONTEXT]) };
+  const nextManifest = manifestText(orderedTargets([...(manifest?.targets ?? []), ...targets]), records, instructions, layout);
+  const oldManifest = read(root, layout.manifest);
+  if (oldManifest !== nextManifest) changes.push({ path: layout.manifest, before: oldManifest, after: nextManifest });
+  return { changes, conflicts, ...(layout.context ? { context: JSON.parse(files[layout.context]) } : {}) };
 }
 
-function planRemove(root, manifest, targets) {
+function planRemove(root, manifest, targets, layout) {
   const changes = [];
   const conflicts = [];
   const remainingTargets = manifest.targets.filter((target) => !targets.includes(target));
   const records = { ...manifest.files };
   const instructions = { ...manifest.instructions };
-  const removals = targets.flatMap((target) => TARGETS[target].files);
-  if (!remainingTargets.length) removals.push(CONTEXT);
+  const removals = targets.flatMap((target) => layout.targets[target].files);
+  if (!remainingTargets.length && layout.context) removals.push(layout.context);
   for (const name of removals) {
     const record = records[name];
     delete records[name];
-    if (!record.owned) continue;
+    if (!record?.owned) continue;
     const current = read(root, name);
     if (current === null) continue;
     if (hash(current) !== record.sha256) conflicts.push(`${name}: kurulumdan sonra değiştirilmiş`);
     else changes.push({ path: name, before: current, after: null });
   }
-  for (const name of instructionFiles(targets)) {
+  for (const name of instructionFiles(targets, layout)) {
     const record = instructions[name];
     delete instructions[name];
     const original = read(root, name);
@@ -248,8 +288,8 @@ function planRemove(root, manifest, targets) {
         after: remaining || (record.existed ? '' : null) });
     }
   }
-  changes.push({ path: MANIFEST, before: read(root, MANIFEST),
-    after: remainingTargets.length ? manifestText(remainingTargets, records, instructions) : null });
+  changes.push({ path: layout.manifest, before: read(root, layout.manifest),
+    after: remainingTargets.length ? manifestText(remainingTargets, records, instructions, layout) : null });
   return { changes, conflicts };
 }
 
@@ -269,14 +309,15 @@ function write(root, name, value) {
   }
 }
 
-function apply(root, plan) {
-  const directory = safePath(root, '.advisor');
+function apply(root, plan, layout) {
+  const directory = safePath(root, layout.directory);
   const directoryExisted = fs.existsSync(directory);
   fs.mkdirSync(directory, { recursive: true });
-  const lock = safePath(root, '.advisor/lock');
+  const lockPath = `${layout.directory}/lock`;
+  const lock = safePath(root, lockPath);
   let descriptor;
   try { descriptor = fs.openSync(lock, 'wx'); } catch (error) {
-    if (error.code === 'EEXIST') throw new Error('Başka bir advisor işlemi çalışıyor (.advisor/lock).');
+    if (error.code === 'EEXIST') throw new Error(`Başka bir advisor işlemi çalışıyor (${lockPath}).`);
     throw error;
   }
   const applied = [];
@@ -295,7 +336,7 @@ function apply(root, plan) {
   } finally {
     fs.closeSync(descriptor);
     fs.unlinkSync(lock);
-    if (!directoryExisted || plan.changes.some((item) => item.path === MANIFEST && item.after === null)) {
+    if (!directoryExisted || plan.changes.some((item) => item.path === layout.manifest && item.after === null)) {
       try { fs.rmdirSync(directory); } catch (error) {
         if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error;
       }
@@ -303,32 +344,46 @@ function apply(root, plan) {
   }
 }
 
-function status(root, manifest, targets) {
-  if (!manifest) return { installed: false, healthy: false, files: [], message: 'Advisor kurulu değil. advisor init çalıştırın.' };
-  const desired = desiredFiles(root, targets);
-  const files = managedFiles(targets).map((name) => {
+function status(root, manifest, targets, layout) {
+  if (!manifest) return { installed: false, healthy: false, files: [], message: `Advisor kurulu değil. advisor init${layout.global ? ' --global' : ''} çalıştırın.` };
+  const desired = desiredFiles(root, targets, layout);
+  const files = managedFiles(targets, layout).map((name) => {
     const current = read(root, name);
     const record = manifest.files[name];
     const state = current === null ? 'missing' : !record ? 'outdated' : hash(current) !== record.sha256 ? 'modified'
       : current !== desired[name] ? 'outdated' : 'ok';
     return { path: name, owned: record?.owned ?? false, state };
   });
-  for (const name of instructionFiles(targets)) {
+  for (const name of instructionFiles(targets, layout)) {
     const block = section(read(root, name), name);
     const record = manifest.instructions[name];
     files.push({ path: `${name} (advisor)`, state: !block ? 'missing'
       : !record ? 'outdated' : hash(block.text) !== record.sha256 ? 'modified'
-        : block.text !== desiredSection(name) ? 'outdated' : 'ok' });
+        : block.text !== desiredSection(name, root, layout) ? 'outdated' : 'ok' });
   }
   return { installed: true, targets: manifest.targets, checkedTargets: targets,
     healthy: targets.every((target) => manifest.targets.includes(target))
       && files.every((item) => item.state === 'ok') && manifest.version === version,
-    installedVersion: manifest.version, availableVersion: version, files, context: detect(root) };
+    installedVersion: manifest.version, availableVersion: version, files, ...(layout.context ? { context: detect(root) } : {}) };
 }
 
-const HELP = `codex-advisor ${version}\n\nKullanım: advisor <init|status|update|remove> [--target <codex|copilot|claude|all>] [--path <klasör>] [--dry-run] [--json]\n\n  init       Seçilen aracın skill ve ajanlarını kurar; mevcut kuruluma hedef ekleyebilir.\n  status     Kurulumu, dosya değişikliklerini ve proje teknolojilerini gösterir.\n  update     Mevcut kurulumu bu CLI sürümündeki şablonlarla günceller.\n  remove     Seçilen veya tüm kurulu hedefleri kaldırır; diğer araçlara dokunmaz.\n\nYeni kurulumda varsayılan araç codex; mevcut kurulumda kayıtlı araçlar kullanılır.\n--target all üç aracı seçer; update yalnızca kurulu hedefleri günceller.\nVarsayılan proje Git kökü; Git dışında geçerli klasör. --path tam hedefi seçer.\n--dry-run dosya yazmadan değişiklikleri gösterir. --json yapılandırılmış çıktı verir.\n--help yardım, --version sürüm bilgisini gösterir.\n`;
+const HELP = `codex-advisor ${version}\n\nKullanım: advisor <init|status|update|remove> [--target <codex|copilot|claude|all>] [--path <klasör> | --global] [--dry-run] [--json]\n\n  init       Seçilen aracın skill ve ajanlarını kurar; mevcut kuruluma hedef ekleyebilir.\n  status     Kurulumu, dosya değişikliklerini ve proje teknolojilerini gösterir.\n  update     Mevcut kurulumu bu CLI sürümündeki şablonlarla günceller.\n  remove     Seçilen veya tüm kurulu hedefleri kaldırır; diğer araçlara dokunmaz.\n\nYeni kurulumda varsayılan araç codex; mevcut kurulumda kayıtlı araçlar kullanılır.\n--target all üç aracı seçer; update yalnızca kurulu hedefleri günceller.\nVarsayılan proje Git kökü; Git dışında geçerli klasör. --path tam hedefi seçer.\n--global kullanıcı düzeyine kurar (Codex, Claude Code, Copilot CLI); --path ile kullanılamaz.\nProje ve global kurulumlar ayrı yönetilir; global kapsamda proje teknolojisi tespit edilmez.\n--dry-run dosya yazmadan değişiklikleri gösterir. --json yapılandırılmış çıktı verir.\n--help yardım, --version sürüm bilgisini gösterir.\n`;
 
-export function run(args, cwd = process.cwd(), output = console.log) {
+// This release installs into documented default personal locations only.
+// Refuse to claim success in an inactive directory when a host redirects its home.
+function validateGlobalHomes(root, targets, env) {
+  for (const [target, variable, directory] of [
+    ['codex', 'CODEX_HOME', '.codex'], ['copilot', 'COPILOT_HOME', '.copilot'],
+    ['claude', 'CLAUDE_CONFIG_DIR', '.claude'],
+  ]) {
+    if (targets.includes(target) && env[variable]
+      && path.resolve(env[variable]) !== path.join(root, directory)) {
+      throw new Error(`--global özel ${variable} yolunu henüz desteklemiyor; varsayılan ${path.join(root, directory)} kullanılır.`);
+    }
+  }
+}
+
+export function run(args, cwd = process.cwd(), output = console.log, options = {}) {
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) { output(HELP); return 0; }
   if (args.length === 1 && args[0] === '--version') { output(version); return 0; }
   const command = args[0];
@@ -337,6 +392,7 @@ export function run(args, cwd = process.cwd(), output = console.log) {
   let explicit = false;
   let dryRun = false;
   let asJson = false;
+  let global = false;
   let requestedTarget;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--path') {
@@ -348,38 +404,44 @@ export function run(args, cwd = process.cwd(), output = console.log) {
       if (!['all', ...ALL_TARGETS].includes(requestedTarget)) {
         throw new Error('--target codex, copilot, claude veya all olmalı.');
       }
-    } else if (args[i] === '--dry-run') dryRun = true;
+    } else if (args[i] === '--global') global = true;
+    else if (args[i] === '--dry-run') dryRun = true;
     else if (args[i] === '--json') asJson = true;
     else throw new Error(`Bilinmeyen seçenek: ${args[i]}`);
   }
-  const root = projectRoot(directory, explicit);
-  const manifest = loadManifest(root);
+  if (global && explicit) throw new Error('--global ve --path birlikte kullanılamaz.');
+  const layout = global ? GLOBAL : PROJECT;
+  const root = global ? fs.realpathSync(options.homeDirectory ?? os.homedir()) : projectRoot(directory, explicit);
+  const manifest = loadManifest(root, layout);
   const targets = requestedTarget === 'all'
     ? command === 'init' || command === 'status' ? ALL_TARGETS : manifest?.targets ?? ALL_TARGETS
     : requestedTarget ? [requestedTarget] : manifest?.targets ?? ['codex'];
+  if (global) validateGlobalHomes(root, targets, options.env ?? process.env);
+  const scope = global ? 'global' : 'project';
+  const label = global ? `${root} (global)` : root;
   if (command === 'status') {
-    const result = { root, ...status(root, manifest, targets) };
-    output(asJson ? json(result).trimEnd() : [root, result.message ?? `Advisor ${result.installedVersion} (${result.targets.join(', ')})`,
+    const result = { root, scope, ...status(root, manifest, targets, layout) };
+    output(asJson ? json(result).trimEnd() : [label, result.message ?? `Advisor ${result.installedVersion} (${result.targets.join(', ')})`,
       ...(result.files.map((item) => `${item.state.padEnd(9)} ${item.path}${item.owned === false ? ' (mevcut dosya)' : ''}`)),
       ...(result.context ? [`Teknolojiler: ${[...result.context.technologies, ...result.context.frameworks].join(', ') || 'tespit edilemedi'}`] : []),
     ].join('\n'));
     return result.healthy ? 0 : 1;
   }
-  if (command === 'update' && !manifest) throw new Error('Advisor kurulu değil. Önce advisor init çalıştırın.');
+  if (command === 'update' && !manifest) throw new Error(`Advisor kurulu değil. Önce advisor init${global ? ' --global' : ''} çalıştırın.`);
   if (command === 'remove' && !manifest) {
-    output(asJson ? json({ root, command, changes: [], conflicts: [] }).trimEnd() : 'Advisor kurulu değil; değişiklik yapılmadı.');
+    output(asJson ? json({ root, scope, command, changes: [], conflicts: [] }).trimEnd() : 'Advisor kurulu değil; değişiklik yapılmadı.');
     return 0;
   }
   if (manifest && ['update', 'remove'].includes(command)) {
     const missing = targets.filter((target) => !manifest.targets.includes(target));
     if (missing.length) throw new Error(`Kurulu olmayan hedef: ${missing.join(', ')}. Eklemek için advisor init --target <hedef> kullanın.`);
   }
-  const plan = command === 'remove' ? planRemove(root, manifest, targets) : planInstall(root, manifest, targets);
-  const result = { root, command, targets, dryRun, changes: plan.changes.map((item) => ({ path: item.path,
+  const plan = command === 'remove' ? planRemove(root, manifest, targets, layout) : planInstall(root, manifest, targets, layout);
+  const result = { root, scope, command, targets, dryRun, changes: plan.changes.map((item) => ({ path: item.path,
     action: item.after === null ? 'remove' : item.before === null ? 'create' : 'update' })),
   conflicts: plan.conflicts, ...(plan.context ? { context: plan.context } : {}) };
-  if (!plan.conflicts.length && !dryRun && plan.changes.length) apply(root, plan);
-  output(asJson ? json(result).trimEnd() : [root,
+  if (!plan.conflicts.length && !dryRun && plan.changes.length) apply(root, plan, layout);
+  output(asJson ? json(result).trimEnd() : [label,
     ...(plan.conflicts.length ? ['Çakışma var; hiçbir dosya değiştirilmedi.', ...plan.conflicts,
       'Değişikliklerinizi yedekleyip çakışmayı giderdikten sonra tekrar çalıştırın.']
       : [dryRun ? 'Önizleme; dosyalar değiştirilmedi.' : 'İşlem tamamlandı.',
@@ -388,9 +450,9 @@ export function run(args, cwd = process.cwd(), output = console.log) {
         ...(plan.context ? [`Teknolojiler: ${[...plan.context.technologies, ...plan.context.frameworks].join(', ') || 'tespit edilemedi'}`,
           ...plan.context.warnings] : []),
         ...(command === 'init' ? targets.map((target) => ({
-          codex: 'Codex: $model-advisor ile kullanın.',
-          copilot: 'Copilot: başlangıçta advisor ajanını bir kez seçin; destekleniyorsa alt ajanları otomatik yönlendirir, yoksa işi mevcut modelle sürdürür.',
-          claude: 'Claude Code: /model-advisor ile kullanın.',
+          codex: 'Codex: gpt-6-sol / medium ile başlayın; $model-advisor gerektiğinde güçlü advisor ajanına danışmayı yönlendirir.',
+          copilot: 'Copilot: standard-worker (Claude Sonnet 5.5) ile başlayın; gerektiğinde güçlü advisor ajanına danışır, uygulamaya standart model devam eder.',
+          claude: 'Claude Code: Sonnet 5.5 ile başlayın; /model-advisor gerektiğinde güçlü advisor ajanına danışmayı yönlendirir.',
         })[target]) : []),
       ]),
   ].join('\n'));
