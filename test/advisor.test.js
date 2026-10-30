@@ -25,7 +25,8 @@ const get = (root, name) => fs.readFileSync(path.join(root, name), 'utf8');
 function invoke(root, command, ...options) {
   let result;
   const target = options.includes('--path') ? [] : ['--path', root];
-  const code = run([command, '--json', ...target, ...options], root, (text) => { result = JSON.parse(text); });
+  const host = command === 'init' && !options.includes('--target') ? ['--target', 'all'] : [];
+  const code = run([command, '--json', ...target, ...host, ...options], root, (text) => { result = JSON.parse(text); });
   return { code, ...result };
 }
 
@@ -242,4 +243,258 @@ test('CLI completes preview, install, status, update and remove in a project wit
   }
   assert.equal(fs.existsSync(path.join(root, MANIFEST)), false);
   assert.equal(fs.existsSync(path.join(root, SKILL)), false);
+});
+
+const HOST_INSTRUCTIONS = ['CLAUDE.md', '.github/copilot-instructions.md'];
+
+test('installs native model profiles and a shared skill for all three hosts', (t) => {
+  const root = project(t);
+  invoke(root, 'init');
+  for (const [role, label, id] of [
+    ['advisor', 'Claude Opus 5.5', 'claude-opus-5-5'],
+    ['fast-worker', 'Claude Haiku 5.5', 'claude-haiku-5-5'],
+    ['standard-worker', 'Claude Sonnet 5.5', 'claude-sonnet-5-5'],
+    ['deep-expert', 'Claude Opus 5.5', 'claude-opus-5-5'],
+  ]) {
+    assert.ok(get(root, `.github/agents/${role}.agent.md`).includes(`model: ${label}\n`));
+    assert.ok(get(root, `.claude/agents/${role}.md`).includes(`model: ${id}\n`));
+  }
+  assert.equal(get(root, '.github/skills/model-advisor/SKILL.md'), get(root, SKILL));
+  assert.equal(get(root, '.claude/skills/model-advisor/SKILL.md'), get(root, SKILL));
+  assert.ok(get(root, '.codex/agents/standard-worker.toml').includes('model = "gpt-6-sol"'));
+  for (const name of HOST_INSTRUCTIONS) assert.ok(get(root, name).includes('## Advisor'));
+  assert.equal(JSON.parse(get(root, MANIFEST)).schemaVersion, 3);
+});
+
+for (const name of HOST_INSTRUCTIONS) {
+  test(`preserves existing ${name} bytes and outside edits through the lifecycle`, (t) => {
+    const root = project(t);
+    const original = '# Team\r\nProject rules.\r\n';
+    put(root, name, original);
+    invoke(root, 'init');
+    put(root, name, 'Before\n' + get(root, name) + '\nAfter\n');
+    assert.equal(invoke(root, 'update').code, 0);
+    assert.equal(invoke(root, 'remove').code, 0);
+    assert.equal(get(root, name), 'Before\n' + original + '\nAfter\n');
+  });
+
+  test(`modified managed section in ${name} blocks all writes`, (t) => {
+    const root = project(t);
+    invoke(root, 'init');
+    const manifest = get(root, MANIFEST);
+    put(root, name, get(root, name).replace('## Advisor', '## Custom'));
+    for (const command of ['init', 'update', 'remove']) {
+      assert.equal(invoke(root, command).code, 1);
+      assert.equal(get(root, MANIFEST), manifest);
+      assert.ok(get(root, '.claude/agents/advisor.md'));
+    }
+    assert.equal(invoke(root, 'status').files.find((item) => item.path === `${name} (advisor)`).state, 'modified');
+  });
+
+  test(`rejects symlinked ${name} without partial installation`, (t) => {
+    const root = project(t);
+    const outside = project(t);
+    put(outside, 'instructions', 'private rules');
+    fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'instructions'), path.join(root, name));
+    assert.throws(() => invoke(root, 'init'), /Sembolik bağlantı/);
+    assert.equal(get(outside, 'instructions'), 'private rules');
+    assert.equal(fs.existsSync(path.join(root, SKILL)), false);
+  });
+}
+
+function legacyInstall(root) {
+  const names = [SKILL, '.codex/agents/fast-worker.toml', '.codex/agents/standard-worker.toml',
+    '.codex/agents/deep-expert.toml', '.advisor/context.json'];
+  const files = {};
+  for (const name of names) {
+    const text = `Original v0.1 content: ${name}\n`;
+    put(root, name, text);
+    files[name] = { owned: true, sha256: createHash('sha256').update(text).digest('hex') };
+  }
+  const block = '<!-- codex-advisor:start -->\n## Advisor\nOld instructions\n<!-- codex-advisor:end -->';
+  put(root, 'AGENTS.md', '# Existing rules\n\n' + block);
+  put(root, MANIFEST, JSON.stringify({ schemaVersion: 1, version: '0.1.0', profile: 'base', files,
+    agents: { sha256: createHash('sha256').update(block).digest('hex'), existed: true, separator: '\n' } }));
+}
+
+test('migrates v0.1 installations without losing ownership or existing host instructions', (t) => {
+  const root = project(t);
+  legacyInstall(root);
+  put(root, 'CLAUDE.md', 'Team Claude rules');
+  put(root, '.github/copilot-instructions.md', 'Team Copilot rules\r\n');
+  const oldManifest = get(root, MANIFEST);
+  assert.equal(invoke(root, 'status').healthy, false);
+  assert.equal(invoke(root, 'update', '--dry-run').code, 0);
+  assert.equal(get(root, MANIFEST), oldManifest);
+  assert.equal(invoke(root, 'update').code, 0);
+  assert.equal(invoke(root, 'status').healthy, true);
+  assert.deepEqual(invoke(root, 'update').changes, []);
+  assert.equal(invoke(root, 'remove').code, 0);
+  assert.equal(get(root, 'AGENTS.md'), '# Existing rules\n');
+  assert.equal(get(root, 'CLAUDE.md'), 'Team Claude rules');
+  assert.equal(get(root, '.github/copilot-instructions.md'), 'Team Copilot rules\r\n');
+});
+
+test('can remove v0.1 installation without adopting unrelated host files', (t) => {
+  const root = project(t);
+  legacyInstall(root);
+  put(root, 'CLAUDE.md', 'Mine');
+  put(root, '.github/agents/advisor.agent.md', 'Mine too');
+  assert.equal(invoke(root, 'remove').code, 0);
+  assert.equal(get(root, 'CLAUDE.md'), 'Mine');
+  assert.equal(get(root, '.github/agents/advisor.agent.md'), 'Mine too');
+});
+
+test('native agent collision aborts adding targets before changing legacy files', (t) => {
+  const root = project(t);
+  legacyInstall(root);
+  put(root, '.claude/agents/advisor.md', 'My advisor');
+  const manifest = get(root, MANIFEST);
+  assert.equal(invoke(root, 'init', '--target', 'all').code, 1);
+  assert.equal(get(root, MANIFEST), manifest);
+  assert.equal(get(root, SKILL), `Original v0.1 content: ${SKILL}\n`);
+  assert.equal(fs.existsSync(path.join(root, '.github/agents/advisor.agent.md')), false);
+});
+
+test('rejects unknown instruction paths in manifest before deletion', (t) => {
+  const root = project(t);
+  invoke(root, 'init');
+  const manifest = JSON.parse(get(root, MANIFEST));
+  manifest.instructions['victim.md'] = manifest.instructions['CLAUDE.md'];
+  delete manifest.instructions['CLAUDE.md'];
+  put(root, MANIFEST, JSON.stringify(manifest));
+  assert.throws(() => invoke(root, 'remove'), /manifest/);
+  assert.ok(get(root, SKILL));
+});
+
+const HOST_PATHS = {
+  codex: { directory: '.codex', skill: SKILL, instructions: 'AGENTS.md' },
+  copilot: { directory: '.github', skill: '.github/skills/model-advisor/SKILL.md', instructions: '.github/copilot-instructions.md' },
+  claude: { directory: '.claude', skill: '.claude/skills/model-advisor/SKILL.md', instructions: 'CLAUDE.md' },
+};
+
+for (const target of Object.keys(HOST_PATHS)) {
+  test(`isolated ${target} installation does not create other host files`, (t) => {
+    const root = project(t);
+    const result = invoke(root, 'init', '--target', target);
+    assert.equal(result.code, 0);
+    const manifest = JSON.parse(get(root, MANIFEST));
+    assert.deepEqual(manifest.targets, [target]);
+    for (const [host, paths] of Object.entries(HOST_PATHS)) {
+      assert.equal(fs.existsSync(path.join(root, paths.directory)), host === target);
+      assert.equal(fs.existsSync(path.join(root, paths.skill)), host === target);
+      assert.equal(fs.existsSync(path.join(root, paths.instructions)), host === target);
+    }
+    assert.equal(invoke(root, 'status').healthy, true);
+    assert.deepEqual(invoke(root, 'update').changes, []);
+    assert.equal(invoke(root, 'remove', '--target', target).code, 0);
+    for (const paths of Object.values(HOST_PATHS)) {
+      assert.equal(fs.existsSync(path.join(root, paths.skill)), false);
+      assert.equal(fs.existsSync(path.join(root, paths.instructions)), false);
+    }
+    assert.equal(fs.existsSync(path.join(root, MANIFEST)), false);
+  });
+}
+
+test('fresh init without --target defaults to Codex and remembers the selection', (t) => {
+  const root = project(t);
+  let result;
+  assert.equal(run(['init', '--path', root, '--json'], root, (text) => { result = JSON.parse(text); }), 0);
+  assert.deepEqual(result.targets, ['codex']);
+  assert.equal(fs.existsSync(path.join(root, '.github')), false);
+  assert.equal(fs.existsSync(path.join(root, '.claude')), false);
+  assert.deepEqual(invoke(root, 'update').changes, []);
+  assert.deepEqual(invoke(root, 'status').targets, ['codex']);
+});
+
+test('adding and removing one target preserves other targets and shared context', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'codex');
+  const codexSkill = get(root, SKILL);
+  assert.equal(invoke(root, 'init', '--target', 'copilot').code, 0);
+  assert.deepEqual(invoke(root, 'status').targets, ['codex', 'copilot']);
+  assert.equal(get(root, SKILL), codexSkill);
+  const context = get(root, '.advisor/context.json');
+  const manifest = get(root, MANIFEST);
+  assert.equal(invoke(root, 'remove', '--target', 'copilot', '--dry-run').code, 0);
+  assert.equal(get(root, MANIFEST), manifest);
+  assert.equal(invoke(root, 'remove', '--target', 'copilot').code, 0);
+  assert.equal(get(root, SKILL), codexSkill);
+  assert.equal(get(root, '.advisor/context.json'), context);
+  assert.equal(fs.existsSync(path.join(root, '.github/agents/advisor.agent.md')), false);
+  assert.deepEqual(invoke(root, 'status').targets, ['codex']);
+  assert.equal(invoke(root, 'status').healthy, true);
+  assert.equal(invoke(root, 'remove').code, 0);
+  assert.equal(fs.existsSync(path.join(root, '.advisor')), false);
+});
+
+test('targeted lifecycle ignores modifications and symlinks belonging to other tools', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'all');
+  put(root, '.claude/agents/advisor.md', 'User changes');
+  put(root, 'CLAUDE.md', 'malformed <!-- codex-advisor:start -->');
+  fs.unlinkSync(path.join(root, '.github/agents/advisor.agent.md'));
+  fs.symlinkSync('/unrelated/file', path.join(root, '.github/agents/advisor.agent.md'));
+  assert.equal(invoke(root, 'update', '--target', 'codex').code, 0);
+  assert.equal(invoke(root, 'status', '--target', 'codex').healthy, true);
+  assert.equal(invoke(root, 'remove', '--target', 'codex').code, 0);
+  assert.equal(get(root, '.claude/agents/advisor.md'), 'User changes');
+  assert.ok(fs.lstatSync(path.join(root, '.github/agents/advisor.agent.md')).isSymbolicLink());
+});
+
+test('a target can be removed and reinstalled without changing remaining ownership', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'all');
+  const original = JSON.parse(get(root, MANIFEST));
+  invoke(root, 'remove', '--target', 'claude');
+  invoke(root, 'init', '--target', 'claude');
+  const current = JSON.parse(get(root, MANIFEST));
+  assert.deepEqual(current, original);
+  assert.equal(invoke(root, 'status').healthy, true);
+});
+
+test('update never installs an unselected tool and reports invalid targets without writes', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'codex');
+  const manifest = get(root, MANIFEST);
+  for (const command of ['update', 'remove']) {
+    assert.throws(() => invoke(root, command, '--target', 'claude'), /Kurulu olmayan hedef/);
+  }
+  for (const options of [['--target'], ['--target', 'unknown'], ['--target', 'codex', '--target', 'claude']]) {
+    assert.throws(() => invoke(root, 'init', ...options), /--target/);
+  }
+  assert.equal(invoke(root, 'update', '--target', 'all').code, 0);
+  assert.equal(invoke(root, 'status', '--target', 'claude').healthy, false);
+  assert.equal(get(root, MANIFEST), manifest);
+  assert.equal(fs.existsSync(path.join(root, '.claude')), false);
+});
+
+test('v0.1 update preserves Codex-only selection; v0.2 update preserves all tools', (t) => {
+  const root = project(t);
+  legacyInstall(root);
+  assert.equal(invoke(root, 'update').code, 0);
+  assert.deepEqual(invoke(root, 'status').targets, ['codex']);
+  assert.equal(fs.existsSync(path.join(root, '.github')), false);
+  assert.equal(fs.existsSync(path.join(root, '.claude')), false);
+  invoke(root, 'init', '--target', 'all');
+  const old = JSON.parse(get(root, MANIFEST));
+  old.schemaVersion = 2;
+  old.version = '0.2.0';
+  delete old.targets;
+  put(root, MANIFEST, JSON.stringify(old));
+  assert.equal(invoke(root, 'update').code, 0);
+  assert.deepEqual(invoke(root, 'status').targets, ['codex', 'copilot', 'claude']);
+  assert.equal(invoke(root, 'status').healthy, true);
+});
+
+test('rejects manifest target tampering before removal', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'all');
+  const manifest = JSON.parse(get(root, MANIFEST));
+  for (const targets of [[], ['codex', 'codex'], ['unknown'], ['codex']]) {
+    put(root, MANIFEST, JSON.stringify({ ...manifest, targets }));
+    assert.throws(() => invoke(root, 'remove'), /manifest/);
+    assert.ok(get(root, SKILL));
+  }
 });

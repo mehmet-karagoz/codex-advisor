@@ -1,102 +1,39 @@
 ---
 name: model-advisor
-description: Automatically evaluate coding task complexity and route suitable tasks to cost-efficient or stronger Codex subagents with appropriate model and reasoning effort. Use for software development, debugging, architecture, refactoring, and code review.
+description: Evaluate coding task complexity and select suitable native agents for Codex, GitHub Copilot or Claude Code. Use for development planning, implementation, debugging, architecture, refactoring and review.
 ---
 
 # Adaptive Model Advisor
 
-## Objective
+Before substantial work, evaluate complexity, uncertainty, risk and scope. Keep the main session model unchanged. Read .advisor/context.json when present and verify its hints against the project.
 
-Optimize model selection and reasoning effort for coding tasks.
+## Host-specific routing
 
-Keep the main session model unchanged. The model preferences below apply only when available in the current environment.
+| Complexity | Codex agent / model / effort | Copilot and Claude Code agent / model / effort |
+| --- | --- | --- |
+| LOW: isolated searches, renames, small fixes | fast_worker / gpt-6-luna / low | fast-worker / Claude Haiku 5.5 / low |
+| MEDIUM: normal features, tests, localized refactoring | standard_worker / gpt-6-sol / medium | standard-worker / Claude Sonnet 5.5 / medium |
+| HIGH: difficult bugs, concurrency, multi-module changes | deep_expert / gpt-6.1-sol / high | deep-expert / Claude Opus 5.5 / high |
+| CRITICAL: security, financial correctness, major architecture | deep_expert / gpt-6.1-sol / xhigh if supported | advisor for planning, deep-expert for investigation / Claude Opus 5.5 / highest supported effort when justified |
 
-Do not assume all tasks require the strongest model.
+For Copilot and Claude Code, advisor uses Opus for high reasoning advice and planning; standard-worker uses Sonnet 5.5 for implementation. Use Haiku for well-specified low complexity work. Effort is a preference only where supported; do not invent an editor setting to enforce it.
 
-## Complexity Classification
+## Native integrations
 
-Before significant work, classify the task internally.
+- Codex: .codex/agents/*.toml and .agents/skills/model-advisor/SKILL.md.
+- GitHub Copilot in VS Code and Visual Studio: .github/agents/*.agent.md and .github/copilot-instructions.md. Select advisor, standard-worker, fast-worker or deep-expert in the agent picker when automatic delegation is unavailable.
+- Claude Code: .claude/agents/*.md and CLAUDE.md. Invoke configured agents without per-call model overrides to preserve their pinned model IDs.
 
-### LOW
-Examples:
-- Renaming variables or methods
-- Simple DTO updates
-- Searching files
-- Straightforward syntax fixes
+Use only the host's native agent tool when it is actually available. Never call another provider's CLI or API to simulate delegation. A model ID in one host does not configure another host.
 
-Preferred:
-- Model: gpt-6-luna
-- Effort: low
+## Routing policy
 
-### MEDIUM
-Examples:
-- Normal feature development
-- Unit tests
-- Localized refactoring
-- Well-understood bug fixes
+1. Prefer the least expensive sufficient configuration. Keep short sequential work in the main session when delegation costs more than it saves.
+2. Delegate only when it improves quality or efficiency. Give each worker explicit file ownership and responsibility; tell it to preserve other contributors' edits.
+3. Use advisor for high reasoning advice when a meaningful planning decision needs it, not for every trivial request.
+4. Escalate when targeted investigation leaves uncertainty, attempted solutions fail, or cross-module/security risks warrant it. Do not repeatedly escalate without new evidence.
+5. Use only available models and effort levels. If unavailable, disclose the limitation and recommend an available alternative or manual agent/model selection. Never silently substitute another version for Sonnet 5.5.
+6. Never claim to change the main model or to have used a different model unless execution actually occurred. Configuration does not prove account access.
+7. Integrate delegated findings and validate the final change. Normally keep complexity classification internal; briefly report actual delegation when it occurs.
 
-Preferred:
-- Model: gpt-6-sol
-- Effort: medium
-
-### HIGH
-Examples:
-- Complex debugging
-- Multi-module refactoring
-- Database performance tuning
-- Concurrency and async problems
-- Distributed system behavior
-
-Preferred:
-- Model: gpt-6.1-sol
-- Effort: high
-
-### CRITICAL
-Examples:
-- Security-sensitive authentication flows
-- Complex payment and settlement logic
-- Race conditions affecting financial correctness
-- Major architecture decisions
-- Difficult production incidents
-
-Preferred:
-- Model: gpt-6.1-sol
-- Effort: xhigh, if supported
-
-## Routing Policy
-
-1. Evaluate complexity, uncertainty, risk, and affected scope.
-2. Prefer the cheapest sufficient configuration.
-3. Keep short, sequential tasks in the main agent when delegation overhead exceeds its benefit.
-4. For independent substantial work, delegate to an appropriate configured subagent.
-5. Do not claim to have changed the main session model.
-6. Do not claim that a different model was used unless delegation actually happened.
-7. If the desired model or effort is unavailable, use the best supported alternative or recommend a manual switch.
-8. Escalate when evidence shows the current approach is insufficient.
-9. Do not repeatedly escalate without new evidence.
-10. Return delegated findings to the main agent for integration.
-
-## Escalation Signals
-
-Escalate when:
-- Multiple attempted solutions fail.
-- Root cause remains uncertain after targeted investigation.
-- Cross-module dependencies introduce substantial risk.
-- Security or financial correctness requires deeper validation.
-- A performance optimization requires complex tradeoffs.
-
-## Efficiency Rules
-
-- Avoid unnecessary agents and duplicate investigations.
-- Avoid expensive models for trivial operations.
-- Never delegate solely to make a task appear more sophisticated.
-- Do not interrupt an otherwise successful task to change models.
-- Use stronger agents when quality improvement justifies the overhead.
-
-## Reporting
-
-Normally do not report complexity classification.
-
-When delegation happens, briefly state which agent handled the task.
-
-When automatic delegation is impossible, mention the recommended model and effort only if it would materially improve the outcome.
+These files guide native tools; they do not install extensions, grant model access, force the main chat model or enable unavailable agent features.
