@@ -166,7 +166,10 @@ function desiredSection(name = 'AGENTS.md') {
   const routing = name === 'AGENTS.md'
     ? 'Use fast_worker for simple tasks, standard_worker for normal development, and deep_expert for difficult work; preserve the configured GPT model preferences.'
     : 'Use fast-worker (Claude Haiku 5.5) for simple tasks, standard-worker (Claude Sonnet 5.5) for normal development, advisor (Claude Opus 5.5) for high reasoning and planning, and deep-expert (Claude Opus 5.5) for difficult investigations.';
-  return `${START}\n## Advisor\n\nRead ${skill} when planning development work.\nRead .advisor/context.json for detected project technologies and validation scripts; verify these hints before using them.\nEvaluate complexity before substantial execution. Delegate only when it improves efficiency or quality.\n${routing}\nKeep short tasks in the main session when delegation overhead outweighs its benefit. Keep the main session model unchanged.\nUse the host's native agent tool only when available. Never claim a model switch or delegation that did not happen.\nIf a configured model is unavailable, disclose that limitation and recommend an available model or manual selection; do not silently substitute for Sonnet 5.5.\n${END}`;
+  const fallback = name === '.github/copilot-instructions.md'
+    ? 'Keep advisor selected as the persistent coordinator after the initial selection. Automatically invoke suitable configured workers by exact name without per-call model overrides when native delegation is available and beneficial. Do not ask the user to choose an agent or model for every task. Workers return findings to the coordinator instead of recursively invoking advisor. Carry authorized implementation through validation; respect requests only for advice or planning. If delegation or a configured model is unavailable, disclose the limitation and complete the work in advisor with the current model when sufficient. Recommend a manual switch only if current capabilities are insufficient; never silently substitute a worker model.'
+    : 'If a configured model is unavailable, disclose that limitation and recommend an available model or manual selection; do not silently substitute for Sonnet 5.5.';
+  return `${START}\n## Advisor\n\nRead ${skill} when planning development work.\nRead .advisor/context.json for detected project technologies and validation scripts; verify these hints before using them.\nEvaluate complexity before substantial execution. Delegate only when it improves efficiency or quality.\n${routing}\nKeep short tasks in the main session when delegation overhead outweighs its benefit. Keep the main session model unchanged.\nUse the host's native agent tool only when available. Never claim a model switch or delegation that did not happen.\n${fallback}\n${END}`;
 }
 
 function planInstall(root, manifest, targets) {
@@ -386,7 +389,7 @@ export function run(args, cwd = process.cwd(), output = console.log) {
           ...plan.context.warnings] : []),
         ...(command === 'init' ? targets.map((target) => ({
           codex: 'Codex: $model-advisor ile kullanın.',
-          copilot: 'Copilot: normal işler için standard-worker, planlama için advisor ajanını seçin.',
+          copilot: 'Copilot: başlangıçta advisor ajanını bir kez seçin; destekleniyorsa alt ajanları otomatik yönlendirir, yoksa işi mevcut modelle sürdürür.',
           claude: 'Claude Code: /model-advisor ile kullanın.',
         })[target]) : []),
       ]),

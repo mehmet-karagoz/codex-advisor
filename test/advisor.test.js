@@ -247,6 +247,56 @@ test('CLI completes preview, install, status, update and remove in a project wit
 
 const HOST_INSTRUCTIONS = ['CLAUDE.md', '.github/copilot-instructions.md'];
 
+test('Copilot installs a persistent coordinator with automatic routing and a direct-work fallback', (t) => {
+  const root = project(t);
+  let output;
+  assert.equal(run(['init', '--target', 'copilot', '--path', root], root,
+    (text) => { output = text; }), 0);
+  assert.match(output, /başlangıçta advisor ajanını bir kez seçin/);
+  const agent = get(root, '.github/agents/advisor.agent.md');
+  const header = agent.split('---')[1];
+  // Omitted tools keep each editor's native tools available, including edits and delegation.
+  assert.doesNotMatch(header, /^(tools|agents|handoffs):/m);
+  assert.match(agent, /automatically invoke the appropriate configured worker/);
+  for (const role of ['fast-worker', 'standard-worker', 'deep-expert']) {
+    assert.ok(agent.includes(`- ${role} (`));
+    const workerHeader = get(root, `.github/agents/${role}.agent.md`).split('---')[1];
+    assert.doesNotMatch(workerHeader, /^disable-model-invocation: true$/m);
+  }
+  assert.match(agent, /without per-call model overrides/);
+  assert.match(agent, /complete the authorized work yourself/);
+  assert.match(agent, /You may edit files and run project commands/);
+  assert.doesNotMatch(agent, /This role is advisory: do not edit/);
+  assert.match(agent, /A request only for advice, review or a plan must remain within that scope/);
+  assert.match(get(root, '.github/copilot-instructions.md'), /Do not ask the user to choose an agent or model for every task/);
+  assert.match(get(root, '.github/skills/model-advisor/SKILL.md'), /Select advisor once/);
+  assert.match(get(root, '.github/agents/standard-worker.agent.md'), /instead of invoking advisor recursively/);
+  assert.equal(invoke(root, 'status').healthy, true);
+});
+
+test('Copilot update replaces a managed advisory-only agent and stays idempotent', (t) => {
+  const root = project(t);
+  invoke(root, 'init', '--target', 'all');
+  const name = '.github/agents/advisor.agent.md';
+  const old = '---\nname: advisor\nmodel: Claude Opus 5.5\n---\nThis role is advisory: do not edit files.\n';
+  put(root, name, old);
+  const manifest = JSON.parse(get(root, MANIFEST));
+  manifest.files[name].sha256 = createHash('sha256').update(old).digest('hex');
+  put(root, MANIFEST, JSON.stringify(manifest));
+  const claude = get(root, '.claude/agents/advisor.md');
+  const codex = get(root, '.codex/agents/standard-worker.toml');
+  const preview = invoke(root, 'update', '--target', 'copilot', '--dry-run');
+  assert.equal(preview.code, 0);
+  assert.ok(preview.changes.some((item) => item.path === name && item.action === 'update'));
+  assert.equal(get(root, name), old);
+  assert.equal(invoke(root, 'update', '--target', 'copilot').code, 0);
+  assert.match(get(root, name), /persistent coordinator/);
+  assert.equal(get(root, '.claude/agents/advisor.md'), claude);
+  assert.equal(get(root, '.codex/agents/standard-worker.toml'), codex);
+  assert.equal(invoke(root, 'status').healthy, true);
+  assert.deepEqual(invoke(root, 'update', '--target', 'copilot').changes, []);
+});
+
 test('installs native model profiles and a shared skill for all three hosts', (t) => {
   const root = project(t);
   invoke(root, 'init');

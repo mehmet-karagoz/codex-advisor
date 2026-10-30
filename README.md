@@ -11,10 +11,13 @@ AI araçları için kendi hesabınız, aboneliğiniz ve model erişiminiz gereki
 | --- | --- | --- | --- |
 | Küçük düzeltme, arama, yeniden adlandırma | `fast-worker` | Claude Haiku 5.5 | low |
 | Normal geliştirme, test, yerel refactor | `standard-worker` | Claude Sonnet 5.5 | medium |
-| Planlama, mimari karar, yüksek düşünce | `advisor` | Claude Opus 5.5 | high |
+| Copilot koordinasyonu; planlama, mimari karar, yüksek düşünce | `advisor` | Claude Opus 5.5 | high |
 | Zor hata, güvenlik, eşzamanlılık incelemesi | `deep-expert` | Claude Opus 5.5 | high |
 
-`advisor` inceleme ve planlama yapar; uygulamayı `standard-worker` gerçekleştirir.
+Copilot'ta başlangıçta bir kez `advisor` seçilir; sonraki görevlerde uygun alt ajanı
+kendisi çağırır ve sonucu doğrular. Planlamayı kendisi, normal uygulamayı
+`standard-worker`, basit işleri `fast-worker`, zor incelemeleri `deep-expert` yürütür.
+Claude Code'da `advisor` inceleme ve planlama rolünü korur.
 Kısa işlerde alt ajan maliyeti gereksizse ana oturum devam eder.
 Claude Code dosyalarında tam model kimlikleri ve `effort` alanı bulunur.
 Copilot dosyalarında model adları belirtilir; düşünme tercihi editörün desteklediği
@@ -76,22 +79,42 @@ boşluk içeren yolları tırnak içine alın.
 ### VS Code ve Visual Studio / GitHub Copilot
 
 1. Hedef projede `advisor init --target copilot` çalıştırın ve projeyi editörde açın.
-2. Copilot Chat ajan listesinden normal işler için **standard-worker**, yüksek
-   düşünce ve planlama için **advisor**, basit işler için **fast-worker**, zor
-   inceleme için **deep-expert** seçin.
+2. Copilot Chat ajan listesinden başlangıçta bir kez **advisor** seçin. Aynı
+   sohbette sonraki görevleri doğrudan yazın; her işte ajan/model seçmeniz gerekmez.
+   `advisor`, yerel alt ajan aracı varsa işin türüne göre uygun ajanı otomatik çağırır,
+   sonuçları birleştirir ve uygulamayı doğrulamaya kadar tamamlar. Yalnızca plan
+   veya inceleme istendiğinde o kapsamda kalır.
 3. Ajan/model görünmüyorsa pencereyi yenileyin; editör sürümünü ve Copilot
    hesabınızdaki model erişimini kontrol edin.
 
 Visual Studio'da özel ajanlar **18.4+** gerektirir. Daha eski sürümlerde
 `.github/copilot-instructions.md` ile ortak talimatlar kullanılabilir;
-özel ajan ve otomatik yönlendirme desteği varsayılmaz. Modeli mevcut model
-seçicisinden elle seçin. VS Code'da güncel Copilot sürümünü kullanın.
-Otomatik alt ajan çağrısı bulunmayan ortamlarda aynı ajanlar elle seçilebilir.
+özel ajan ve otomatik yönlendirme desteği varsayılmaz. Bu sürümlerde başlangıçta
+mevcut ajan/model seçicisini kullanın. VS Code'da güncel Copilot sürümünü kullanın;
+araç seçicisinde yerel alt ajan çağrısının etkin olduğundan emin olun.
+
+Visual Studio'da özel ajan desteği, otomatik alt ajan çağrısının da bulunduğu
+anlamına gelmez; resmi belgeler bu özelliği doğrulamıyor. `advisor`, bulunduğu
+ortamın gerçekten sunduğu araçları kullanır. Alt ajan aracı yoksa veya tercih edilen
+alt ajan modeli çalıştırılamıyorsa sınırlamayı belirtip işi mevcut modelle kendisi
+sürdürür; yalnızca mevcut yetenekler yetersiz kalırsa elle geçiş önerir.
+Bu durumda alt ajanlara göre otomatik model değişimi gerçekleşmez.
+
+Ortak ajan dosyalarında `tools` kısıtlaması tanımlanmaz; böylece her editörün
+sağladığı araçlar kullanılabilir. VS Code'a özgü `agents`/`handoffs` alanlarına veya
+Visual Studio'da bulunmayabilecek araç adlarına dayanılmaz. Ana sohbet `advisor`
+olarak kalır; model tercihleri çağrılan alt ajanların dosyalarından alınır.
+
+Mevcut hedef projeye bu davranışı geçirmek için CLI'ı güncelledikten sonra
+`advisor update --target copilot` çalıştırın ve `advisor` tanımını yeniden yüklemek
+için yeni sohbet açın.
 
 Ajan biçimi ve model seçimi:
 [GitHub](https://docs.github.com/en/copilot/reference/custom-agents-configuration),
 [VS Code](https://code.visualstudio.com/docs/agent-customization/custom-agents),
 [Visual Studio](https://learn.microsoft.com/en-us/visualstudio/ide/copilot-specialized-agents?view=visualstudio).
+Alt ajan çağrısı ve modele ilişkin sınırlar:
+[VS Code alt ajan belgeleri](https://code.visualstudio.com/docs/agents/run/subagents).
 Model erişimi [Copilot planına ve istemciye](https://docs.github.com/en/copilot/reference/ai-models/supported-models) bağlıdır.
 
 ### Claude Code
