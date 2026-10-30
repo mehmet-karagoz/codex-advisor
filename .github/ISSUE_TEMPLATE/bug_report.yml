@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a reproducible CLI or installation problem.
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Node.js version, advisor version, AI client/version, target, and project or global scope.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact command and the smallest setup that reproduces the issue. Remove credentials and private data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+      description: Include relevant output, exit code, and whether --dry-run reproduces the problem.
+    validations:
+      required: true

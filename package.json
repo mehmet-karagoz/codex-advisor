@@ -2,10 +2,16 @@
   "name": "codex-advisor",
   "version": "0.4.0",
   "description": "Install and manage project-scoped or global advisor skills and agents for Codex, GitHub Copilot and Claude Code.",
+  "license": "MIT",
+  "author": "Mehmet Karagoz",
+  "repository": { "type": "git", "url": "git+https://github.com/mehmet-karagoz/codex-advisor.git" },
+  "homepage": "https://github.com/mehmet-karagoz/codex-advisor#readme",
+  "bugs": { "url": "https://github.com/mehmet-karagoz/codex-advisor/issues" },
+  "keywords": ["codex", "github-copilot", "claude-code", "agents", "skills", "cli", "model-routing"],
   "type": "module",
   "bin": { "advisor": "bin/advisor.js" },
   "engines": { "node": ">=20" },
   "scripts": { "test": "node --test", "check": "node --check bin/advisor.js && node --check src/advisor.js" },
-  "files": ["bin/", "src/", "templates/", "README.md"],
+  "files": ["bin/", "src/", "templates/", "README.md", "README.tr.md", "LICENSE"],
   "private": true
 }
